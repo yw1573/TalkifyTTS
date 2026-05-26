@@ -65,4 +65,87 @@
     <voice id="Cantonese_PlayfulMan"           displayName="活泼男声(粤语)"   description="粤语" language="中文(粤语)" />
     <voice id="Cantonese_CuteGirl"             displayName="可爱女孩(粤语)"   description="粤语" language="中文(粤语)" />
     <voice id="Cantonese_KindWoman"            displayName="善良女声(粤语)"   description="粤语" language="中文(粤语)" />
+
+    <voice id="Santa_Claus"                  displayName="Santa Claus(英语)"        description="节日音色"   language="英语" />
+    <voice id="Grinch"                       displayName="Grinch(英语)"             description="节日音色"   language="英语" />
+    <voice id="Rudolph"                      displayName="Rudolph(英语)"            description="节日音色"   language="英语" />
+    <voice id="Arnold"                       displayName="Arnold(英语)"             description="节日音色"   language="英语" />
+    <voice id="Charming_Santa"               displayName="Charming Santa(英语)"     description="节日音色"   language="英语" />
+    <voice id="Charming_Lady"                displayName="Charming Lady(英语)"      description="节日音色"   language="英语" />
+    <voice id="Sweet_Girl"                   displayName="Sweet Girl(英语)"         description="节日音色"   language="英语" />
+    <voice id="Cute_Elf"                     displayName="Cute Elf(英语)"           description="节日音色"   language="英语" />
+    <voice id="Attractive_Girl"              displayName="Attractive Girl(英语)"    description="节日音色"   language="英语" />
+    <voice id="Serene_Woman"                 displayName="Serene Woman(英语)"       description="节日音色"   language="英语" />
+    <voice id="English_Trustworthy_Man"      displayName="Trustworthy Man(英语)"    description="英语(多口音)" language="英语" />
+    <voice id="English_Graceful_Lady"        displayName="Graceful Lady(英语)"      description="英语(多口音)" language="英语" />
+    <voice id="English_Aussie_Bloke"         displayName="Aussie Bloke(英语)"       description="英语(多口音)" language="英语" />
+    <voice id="English_Whispering_girl"      displayName="Whispering girl(英语)"    description="英语(多口音)" language="英语" />
+    <voice id="English_Diligent_Man"         displayName="Diligent Man(英语)"       description="英语(多口音)" language="英语" />
+    <voice id="English_Gentle-voiced_man"    displayName="Gentle-voiced man(英语)"  description="英语(多口音)" language="英语" />
+
+    <voice id="Japanese_IntellectualSenior"   displayName="Intellectual Senior(日语)"    description="日语" language="日语" />
+    <voice id="Japanese_DecisivePrincess"     displayName="Decisive Princess(日语)"      description="日语" language="日语" />
+    <voice id="Japanese_LoyalKnight"          displayName="Loyal Knight(日语)"           description="日语" language="日语" />
+    <voice id="Japanese_DominantMan"          displayName="Dominant Man(日语)"           description="日语" language="日语" />
+    <voice id="Japanese_SeriousCommander"     displayName="Serious Commander(日语)"      description="日语" language="日语" />
+    <voice id="Japanese_ColdQueen"            displayName="Cold Queen(日语)"             description="日语" language="日语" />
+    <voice id="Japanese_DependableWoman"      displayName="Dependable Woman(日语)"       description="日语" language="日语" />
+    <voice id="Japanese_GentleButler"         displayName="Gentle Butler(日语)"          description="日语" language="日语" />
+    <voice id="Japanese_KindLady"             displayName="Kind Lady(日语)"              description="日语" language="日语" />
+    <voice id="Japanese_CalmLady"             displayName="Calm Lady(日语)"              description="日语" language="日语" />
+    <voice id="Japanese_OptimisticYouth"      displayName="Optimistic Youth(日语)"       description="日语" language="日语" />
+    <voice id="Japanese_GenerousIzakayaOwner" displayName="Generous Izakaya Owner(日语)" description="日语" language="日语" />
+    <voice id="Japanese_SportyStudent"        displayName="Sporty Student(日语)"         description="日语" language="日语" />
+    <voice id="Japanese_InnocentBoy"          displayName="Innocent Boy(日语)"           description="日语" language="日语" />
+    <voice id="Japanese_GracefulMaiden"       displayName="Graceful Maiden(日语)"        description="日语" language="日语" />
+
+    <voice id="Korean_SweetGirl"              displayName="Sweet Girl(韩语)"              description="韩语" language="韩语" />
+    <voice id="Korean_CheerfulBoyfriend"      displayName="Cheerful Boyfriend(韩语)"      description="韩语" language="韩语" />
+    <voice id="Korean_EnchantingSister"       displayName="Enchanting Sister(韩语)"       description="韩语" language="韩语" />
+    <voice id="Korean_ShyGirl"                displayName="Shy Girl(韩语)"                description="韩语" language="韩语" />
+    <voice id="Korean_ReliableSister"         displayName="Reliable Sister(韩语)"         description="韩语" language="韩语" />
+    <voice id="Korean_StrictBoss"             displayName="Strict Boss(韩语)"             description="韩语" language="韩语" />
+    <voice id="Korean_SassyGirl"              displayName="Sassy Girl(韩语)"              description="韩语" language="韩语" />
+    <voice id="Korean_ChildhoodFriendGirl"    displayName="Childhood Friend Girl(韩语)"   description="韩语" language="韩语" />
+    <voice id="Korean_PlayboyCharmer"         displayName="Playboy Charmer(韩语)"         description="韩语" language="韩语" />
+    <voice id="Korean_ElegantPrincess"        displayName="Elegant Princess(韩语)"        description="韩语" language="韩语" />
+    <voice id="Korean_BraveFemaleWarrior"     displayName="Brave Female Warrior(韩语)"    description="韩语" language="韩语" />
+    <voice id="Korean_BraveYouth"             displayName="Brave Youth(韩语)"             description="韩语" language="韩语" />
+    <voice id="Korean_CalmLady"               displayName="Calm Lady(韩语)"               description="韩语" language="韩语" />
+    <voice id="Korean_EnthusiasticTeen"       displayName="Enthusiastic Teen(韩语)"       description="韩语" language="韩语" />
+    <voice id="Korean_SoothingLady"           displayName="Soothing Lady(韩语)"           description="韩语" language="韩语" />
+    <voice id="Korean_IntellectualSenior"     displayName="Intellectual Senior(韩语)"     description="韩语" language="韩语" />
+    <voice id="Korean_LonelyWarrior"          displayName="Lonely Warrior(韩语)"          description="韩语" language="韩语" />
+    <voice id="Korean_MatureLady"             displayName="Mature Lady(韩语)"             description="韩语" language="韩语" />
+    <voice id="Korean_InnocentBoy"            displayName="Innocent Boy(韩语)"            description="韩语" language="韩语" />
+    <voice id="Korean_CharmingSister"         displayName="Charming Sister(韩语)"         description="韩语" language="韩语" />
+    <voice id="Korean_AthleticStudent"        displayName="Athletic Student(韩语)"        description="韩语" language="韩语" />
+    <voice id="Korean_BraveAdventurer"        displayName="Brave Adventurer(韩语)"        description="韩语" language="韩语" />
+    <voice id="Korean_CalmGentleman"          displayName="Calm Gentleman(韩语)"          description="韩语" language="韩语" />
+    <voice id="Korean_WiseElf"                displayName="Wise Elf(韩语)"                description="韩语" language="韩语" />
+    <voice id="Korean_CheerfulCoolJunior"     displayName="Cheerful Cool Junior(韩语)"    description="韩语" language="韩语" />
+    <voice id="Korean_DecisiveQueen"          displayName="Decisive Queen(韩语)"          description="韩语" language="韩语" />
+    <voice id="Korean_ColdYoungMan"           displayName="Cold Young Man(韩语)"          description="韩语" language="韩语" />
+    <voice id="Korean_MysteriousGirl"         displayName="Mysterious Girl(韩语)"         description="韩语" language="韩语" />
+    <voice id="Korean_QuirkyGirl"             displayName="Quirky Girl(韩语)"             description="韩语" language="韩语" />
+    <voice id="Korean_ConsiderateSenior"      displayName="Considerate Senior(韩语)"      description="韩语" language="韩语" />
+    <voice id="Korean_CheerfulLittleSister"   displayName="Cheerful Little Sister(韩语)"  description="韩语" language="韩语" />
+    <voice id="Korean_DominantMan"            displayName="Dominant Man(韩语)"            description="韩语" language="韩语" />
+    <voice id="Korean_AirheadedGirl"          displayName="Airheaded Girl(韩语)"          description="韩语" language="韩语" />
+    <voice id="Korean_ReliableYouth"          displayName="Reliable Youth(韩语)"          description="韩语" language="韩语" />
+    <voice id="Korean_FriendlyBigSister"      displayName="Friendly Big Sister(韩语)"     description="韩语" language="韩语" />
+    <voice id="Korean_GentleBoss"             displayName="Gentle Boss(韩语)"             description="韩语" language="韩语" />
+    <voice id="Korean_ColdGirl"               displayName="Cold Girl(韩语)"               description="韩语" language="韩语" />
+    <voice id="Korean_HaughtyLady"            displayName="Haughty Lady(韩语)"            description="韩语" language="韩语" />
+    <voice id="Korean_CharmingElderSister"    displayName="Charming Elder Sister(韩语)"   description="韩语" language="韩语" />
+    <voice id="Korean_IntellectualMan"        displayName="Intellectual Man(韩语)"        description="韩语" language="韩语" />
+    <voice id="Korean_CaringWoman"            displayName="Caring Woman(韩语)"            description="韩语" language="韩语" />
+    <voice id="Korean_WiseTeacher"            displayName="Wise Teacher(韩语)"            description="韩语" language="韩语" />
+    <voice id="Korean_ConfidentBoss"          displayName="Confident Boss(韩语)"          description="韩语" language="韩语" />
+    <voice id="Korean_AthleticGirl"           displayName="Athletic Girl(韩语)"           description="韩语" language="韩语" />
+    <voice id="Korean_PossessiveMan"          displayName="Possessive Man(韩语)"          description="韩语" language="韩语" />
+    <voice id="Korean_GentleWoman"            displayName="Gentle Woman(韩语)"            description="韩语" language="韩语" />
+    <voice id="Korean_CockyGuy"               displayName="Cocky Guy(韩语)"               description="韩语" language="韩语" />
+    <voice id="Korean_ThoughtfulWoman"        displayName="Thoughtful Woman(韩语)"        description="韩语" language="韩语" />
+    <voice id="Korean_OptimisticYouth"        displayName="Optimistic Youth(韩语)"        description="韩语" language="韩语" />
 </voices>
