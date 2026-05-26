@@ -16,37 +16,34 @@ import javazoom.jl.decoder.Bitstream
 import javazoom.jl.decoder.Decoder
 import javazoom.jl.decoder.Header
 import javazoom.jl.decoder.SampleBuffer
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
-import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.selects.select
 import kotlinx.coroutines.withContext
-import okhttp3.Call
-import okhttp3.ConnectionPool
-import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
-import okhttp3.RequestBody.Companion.toRequestBody
 import okhttp3.Response
+import okhttp3.WebSocket
+import okhttp3.WebSocketListener
 import org.json.JSONObject
-import java.io.IOException
 import java.io.PipedInputStream
 import java.io.PipedOutputStream
-import java.net.SocketTimeoutException
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import java.util.Locale
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.math.roundToInt
 
 /**
- * MiniMax - 语音合成引擎实现
+ * MiniMax - 语音合成引擎实现（WebSocket 版）
  *
  * 继承 [AbstractTtsEngine]，实现 TTS 引擎接口
- * 基于 OkHttp 实现 HTTP 流式音频合成，支持连接复用
- * 将音频数据块实时回调给系统
+ * 基于 OkHttp WebSocket 实现流式音频合成，相比 HTTP 方案显著降低首字播放延迟
  *
  * 引擎 ID：minimax-tts
  * 服务提供商：MiniMax
@@ -58,37 +55,25 @@ class MiniMaxTtsEngine : AbstractTtsEngine() {
         const val ENGINE_ID = "minimax-tts"
         const val ENGINE_NAME = "MiniMax语音合成"
         private const val VOICE_NAME_SEPARATOR = "::"
-        private const val API_URL = "https://api.minimaxi.com/v1/t2a_v2"
-        private const val BACKUP_API_URL = "https://api-bj.minimaxi.com/v1/t2a_v2"
+        private const val WSS_URL = "wss://api.minimaxi.com/ws/v1/t2a_v2"
         private const val DEFAULT_MODEL = "speech-2.8-hd"
 
-        // 文本分块配置
-        private const val MAX_TEXT_LENGTH = 300
+        private const val MAX_TEXT_LENGTH = 10000
 
-        // OkHttp 连接池配置（复用连接，空闲超时 45 秒）
-        private val connectionPool = ConnectionPool(5, 45, TimeUnit.SECONDS)
+        private val SUPPORTED_LANGUAGES = arrayOf("zho", "eng")
 
-        // 共享的 OkHttpClient 实例（支持连接复用）
-        private val sharedClient: OkHttpClient by lazy {
-            OkHttpClient.Builder()
-                .connectionPool(connectionPool)
-                .connectTimeout(30, TimeUnit.SECONDS)
-                .readTimeout(60, TimeUnit.SECONDS)
-                .writeTimeout(30, TimeUnit.SECONDS)
-                .build()
-        }
-
-        /**
-         * 支持的语言列表（ISO 639-2 三字母代码）
-         */
-        val SUPPORTED_LANGUAGES = arrayOf("zho", "eng")
-
-        // 管道缓冲区大小，64KB 扩容管道，防止写入线程阻塞
         private const val PIPE_BUFFER_SIZE = 65536
     }
 
-    // 协程作用域用于异步处理
-    private val engineScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    private val engineJob = SupervisorJob()
+    private val engineScope = CoroutineScope(Dispatchers.IO + engineJob)
+
+    private val client = OkHttpClient.Builder()
+        .connectTimeout(10, TimeUnit.SECONDS)
+        .readTimeout(0, TimeUnit.MILLISECONDS)
+        .writeTimeout(30, TimeUnit.SECONDS)
+        .pingInterval(30, TimeUnit.SECONDS)
+        .build()
 
     @Volatile
     private var isCancelled = false
@@ -97,16 +82,9 @@ class MiniMaxTtsEngine : AbstractTtsEngine() {
     private var hasCompleted = false
 
     @Volatile
-    private var currentCall: Call? = null
+    private var currentWebSocket: WebSocket? = null
 
-    @Volatile
-    private var isFirstChunk = true
-
-    @Volatile
-    private var decodeJob: Job? = null
-
-    val audioConfig: AudioConfig
-        @JvmName("getAudioConfigProperty") get() = AudioConfig.MINI_MAX_TTS
+    private var synthesisJob: Job? = null
 
     /**
      * 缓存的声音ID列表，从资源文件加载
@@ -115,9 +93,9 @@ class MiniMaxTtsEngine : AbstractTtsEngine() {
         loadVoiceIdsFromResource()
     }
 
-    /**
-     * 从资源文件加载声音ID列表
-     */
+    val audioConfig: AudioConfig
+        @JvmName("getAudioConfigProperty") get() = AudioConfig.MINI_MAX_TTS
+
     private fun loadVoiceIdsFromResource(): List<String> {
         val context = TalkifyAppHolder.getContext()
         return if (context != null) {
@@ -173,273 +151,329 @@ class MiniMaxTtsEngine : AbstractTtsEngine() {
         }
 
         logInfo("Starting synthesis: textLength=${text.length}, pitch=${params.pitch}, speechRate=${params.speechRate}")
-        logDebug("Audio config: ${audioConfig.getFormatDescription()}")
-
-        // 取消任何进行中的合成，防止残留的 decodeJob 导致音频重复
-        decodeJob?.cancel()
-        decodeJob = null
 
         isCancelled = false
         hasCompleted = false
-        isFirstChunk = true
 
-        // 将文本分块处理
-        val textChunks = splitTextIntoChunks(text, MAX_TEXT_LENGTH)
-        if (textChunks.isEmpty()) {
-            listener.onError("文本为空")
-            return
-        }
-
-        logDebug("Text split into ${textChunks.size} chunks")
-
-        // 使用协程顺序处理所有文本块
-        engineScope.launch {
-            processChunksSequentially(textChunks, miniMaxConfig, params, listener)
+        synthesisJob?.cancel()
+        synthesisJob = engineScope.launch {
+            try {
+                listener.onSynthesisStarted()
+                performWebSocketSynthesis(text, miniMaxConfig, params, listener)
+                if (!isCancelled && !hasCompleted) {
+                    hasCompleted = true
+                    listener.onSynthesisCompleted()
+                }
+                logInfo("Synthesis completed successfully")
+            } catch (e: Exception) {
+                if (!isCancelled) {
+                    logError("Synthesis error", e)
+                    listener.onError(e.message ?: "合成失败")
+                }
+            }
         }
     }
 
     /**
-     * 顺序处理所有文本块
+     * 通过 WebSocket 执行完整的语音合成流程
      */
-    private suspend fun processChunksSequentially(
-        chunks: List<String>,
+    private suspend fun performWebSocketSynthesis(
+        text: String,
         config: MiniMaxTtsConfig,
         params: SynthesisParams,
         listener: TtsSynthesisListener
     ) {
-        // 创建管道用于 MP3 流式解码
+        val pipeClosed = AtomicBoolean(false)
         val pipedOutputStream = PipedOutputStream()
         val pipedInputStream = withContext(Dispatchers.IO) {
             PipedInputStream(pipedOutputStream, PIPE_BUFFER_SIZE)
         }
 
-        // 通知开始合成
-        withContext(Dispatchers.Main) {
-            listener.onSynthesisStarted()
-        }
-
-        // 启动解码协程（解码是 CPU 密集型操作，调度至 Default）
-        decodeJob = engineScope.launch(Dispatchers.Default) {
+        val decodeJob = engineScope.launch(Dispatchers.Default) {
             decodeMp3Stream(pipedInputStream, listener)
         }
 
+        val connectionDeferred = CompletableDeferred<WebSocket>()
+        val taskStartedDeferred = CompletableDeferred<Unit>()
+        val taskFinishedDeferred = CompletableDeferred<Unit>()
+        val errorDeferred = CompletableDeferred<String>()
+
+        val wsListener = MiniMaxWebSocketListener(
+            pipedOutputStream = pipedOutputStream,
+            pipeClosed = pipeClosed,
+            connectionDeferred = connectionDeferred,
+            taskStartedDeferred = taskStartedDeferred,
+            taskFinishedDeferred = taskFinishedDeferred,
+            errorDeferred = errorDeferred,
+            config = config,
+            params = params
+        )
+
         try {
-            for ((index, chunk) in chunks.withIndex()) {
-                if (isCancelled || hasCompleted) {
-                    logDebug("Synthesis cancelled or completed, stopping chunk processing")
-                    break
+            val request = Request.Builder()
+                .url(WSS_URL)
+                .header("Authorization", "Bearer ${config.apiKey}")
+                .build()
+
+            currentWebSocket = client.newWebSocket(request, wsListener)
+
+            val webSocket = connectionDeferred.await()
+
+            if (isCancelled) {
+                webSocket.close(1000, "Cancelled")
+                return
+            }
+
+            wsListener.sendTaskStart(webSocket)
+
+            taskStartedDeferred.await()
+
+            if (isCancelled) {
+                webSocket.close(1000, "Cancelled")
+                return
+            }
+
+            val textChunks = splitTextIntoChunks(text, MAX_TEXT_LENGTH)
+            logDebug("Text split into ${textChunks.size} chunks for WebSocket streaming")
+
+            wsListener.sendTextChunks(webSocket, textChunks)
+
+            select {
+                taskFinishedDeferred.onAwait { }
+                errorDeferred.onAwait { errorMsg ->
+                    logError("WebSocket task failed: $errorMsg")
+                    listener.onError(errorMsg)
                 }
-
-                logDebug("Processing chunk $index/${chunks.size}, length=${chunk.length}")
-
-                val success = processSingleChunk(
-                    chunk,
-                    index,
-                    chunks.size,
-                    config,
-                    params,
-                    pipedOutputStream,
-                    listener
-                )
-                if (!success) {
-                    logError("Failed to process chunk $index")
-                    break
-                }
             }
-        } finally {
-            // 关闭管道以通知解码器流已结束
-            try {
-                pipedOutputStream.flush()
-                pipedOutputStream.close()
-            } catch (e: Exception) {
-                logDebug("Error closing pipe: ${e.message}")
-            }
-        }
-
-        // 等待解码完成
-        decodeJob?.join()
-
-        // 所有块处理完成
-        if (!isCancelled && !hasCompleted) {
-            hasCompleted = true
-            withContext(Dispatchers.Main) {
-                listener.onSynthesisCompleted()
-            }
-            logInfo("Synthesis completed successfully")
-        }
-    }
-
-    /**
-     * 处理单个文本块
-     * @return 是否成功处理
-     */
-    private suspend fun processSingleChunk(
-        text: String,
-        chunkIndex: Int,
-        totalChunks: Int,
-        config: MiniMaxTtsConfig,
-        params: SynthesisParams,
-        pipedOutputStream: PipedOutputStream,
-        listener: TtsSynthesisListener
-    ): Boolean = withContext(Dispatchers.IO) {
-        try {
-            val request = buildHttpRequest(text, config, params)
-
-            // 使用同步调用便于顺序处理
-            currentCall = sharedClient.newCall(request)
-
-            val response = currentCall?.execute()
-            if (response == null) {
-                logError("Failed to execute HTTP request")
-                withContext(Dispatchers.Main) {
-                    listener.onError(TtsErrorCode.getErrorMessage(TtsErrorCode.ERROR_NETWORK_UNAVAILABLE))
-                }
-                return@withContext false
-            }
-
-            // 打印响应详情
-            logDebug("HTTP Response Code: ${response.code}")
-            logDebug("HTTP Response Headers: ${response.headers}")
-
-            if (!response.isSuccessful) {
-                val errorBody = response.body?.string() ?: "No error body"
-                logError("HTTP error: ${response.code}, body: $errorBody")
-
-                val errorMessage = parseError(errorBody)
-
-                withContext(Dispatchers.Main) {
-                    listener.onError(errorMessage)
-                }
-                response.close()
-                return@withContext false
-            }
-
-            // 处理流式响应，将 MP3 数据写入管道
-            processStreamResponse(response, chunkIndex, pipedOutputStream, listener)
-
-        } catch (e: SocketTimeoutException) {
-            logError("Network timeout", e)
-            withContext(Dispatchers.Main) {
-                listener.onError(TtsErrorCode.getErrorMessage(TtsErrorCode.ERROR_NETWORK_TIMEOUT))
-            }
-            false
-        } catch (e: IOException) {
-            logError("Network error", e)
-            withContext(Dispatchers.Main) {
-                listener.onError(TtsErrorCode.getErrorMessage(TtsErrorCode.ERROR_NETWORK_UNAVAILABLE))
-            }
-            false
         } catch (e: Exception) {
-            logError("Unexpected error during synthesis", e)
-            withContext(Dispatchers.Main) {
-                listener.onError(TtsErrorCode.getErrorMessage(TtsErrorCode.ERROR_SYNTHESIS_FAILED))
+            if (!isCancelled) {
+                logError("WebSocket synthesis error", e)
+                listener.onError(e.message ?: "WebSocket连接失败")
             }
-            false
         } finally {
-            currentCall = null
+            try {
+                withContext(Dispatchers.IO) {
+                    pipedOutputStream.flush()
+                    pipedOutputStream.close()
+                }
+            } catch (_: Exception) {
+            }
+            pipeClosed.set(true)
+            decodeJob.join()
+            currentWebSocket = null
         }
     }
 
     /**
-     * 处理流式响应（SSE 格式），将 MP3 数据写入管道
+     * WebSocket 事件监听器
      */
-    private suspend fun processStreamResponse(
-        response: Response,
-        chunkIndex: Int,
-        pipedOutputStream: PipedOutputStream,
-        listener: TtsSynthesisListener
-    ): Boolean = withContext(Dispatchers.IO) {
-        val body = response.body
-        if (body == null) {
-            logError("Response body is null")
-            return@withContext false
+    inner class MiniMaxWebSocketListener(
+        private val pipedOutputStream: PipedOutputStream,
+        private val pipeClosed: AtomicBoolean,
+        private val connectionDeferred: CompletableDeferred<WebSocket>,
+        private val taskStartedDeferred: CompletableDeferred<Unit>,
+        private val taskFinishedDeferred: CompletableDeferred<Unit>,
+        private val errorDeferred: CompletableDeferred<String>,
+        private val config: MiniMaxTtsConfig,
+        private val params: SynthesisParams
+    ) : WebSocketListener() {
+
+        private val voiceId: String by lazy {
+            if (config.voiceId.isNotEmpty()) {
+                extractRealVoiceName(config.voiceId) ?: config.voiceId
+            } else {
+                voiceIds.firstOrNull() ?: "male-qn-qingse"
+            }
         }
 
-        var hasError = false
+        override fun onOpen(webSocket: WebSocket, response: Response) {
+            logDebug("WebSocket connected: ${response.code}")
+            connectionDeferred.complete(webSocket)
+        }
 
-        try {
-            body.source().use { source ->
-                while (!source.exhausted() && !isCancelled) {
-                    val line = source.readUtf8Line() ?: break
-                    if (line.isBlank()) continue
+        override fun onMessage(webSocket: WebSocket, text: String) {
+            if (pipeClosed.get() || isCancelled) return
 
-                    // SSE 格式: data: {...}
-                    if (!line.startsWith("data:")) continue
+            try {
+                val json = JSONObject(text)
+                val event = json.optString("event", "")
 
-                    val data = line.removePrefix("data:").trim()
-                    if (data.isBlank()) continue
-
-                    try {
-                        val json = JSONObject(data)
-
-                        // 检查 base_resp 是否有错误
+                when (event) {
+                    "connected_success" -> {
+                        logDebug("Received connected_success, session_id=${json.optString("session_id")}")
+                    }
+                    "task_started" -> {
+                        logDebug("Received task_started")
+                        if (!taskStartedDeferred.isCompleted) {
+                            taskStartedDeferred.complete(Unit)
+                        }
+                    }
+                    "task_continued" -> {
+                        handleTaskContinued(json)
+                    }
+                    "task_finished" -> {
+                        logDebug("Received task_finished")
+                        if (!taskFinishedDeferred.isCompleted) {
+                            taskFinishedDeferred.complete(Unit)
+                        }
+                    }
+                    "task_failed" -> {
                         val baseResp = json.optJSONObject("base_resp")
-                        if (baseResp != null) {
-                            val statusCode = baseResp.optInt("status_code", 0)
-                            val statusMsg = baseResp.optString("status_msg", "")
-                            if (statusCode != 0) {
-                                logError("API error: status_code=$statusCode, status_msg=$statusMsg")
-                                hasError = true
-                                withContext(Dispatchers.Main) {
-                                    listener.onError(statusMsg.ifBlank { "API error: $statusCode" })
-                                }
-                                break
-                            }
+                        val statusCode = baseResp?.optInt("status_code", -1) ?: -1
+                        val statusMsg = baseResp?.optString("status_msg", "") ?: ""
+                        val errorMsg = parseMiniMaxError(statusCode, statusMsg)
+                        logError("Received task_failed: $errorMsg")
+                        if (!errorDeferred.isCompleted) {
+                            errorDeferred.complete(errorMsg)
                         }
+                    }
+                }
+            } catch (e: Exception) {
+                logError("Error processing WebSocket message: $text", e)
+            }
+        }
 
-                        // 提取音频数据并写入管道
-                        val dataObj = json.optJSONObject("data")
-                        if (dataObj != null) {
-                            val audioHex = dataObj.optString("audio")
-                            val status = dataObj.optInt("status", 0)
+        private fun handleTaskContinued(json: JSONObject) {
+            val baseResp = json.optJSONObject("base_resp")
+            if (baseResp != null) {
+                val statusCode = baseResp.optInt("status_code", 0)
+                if (statusCode != 0) {
+                    val statusMsg = baseResp.optString("status_msg", "")
+                    logError("task_continued error: status_code=$statusCode, status_msg=$statusMsg")
+                    if (!errorDeferred.isCompleted) {
+                        errorDeferred.complete(parseMiniMaxError(statusCode, statusMsg))
+                    }
+                    return
+                }
+            }
 
-                            if (audioHex.isNotBlank()) {
-                                val mp3Bytes = hexToBytes(audioHex)
-                                if (mp3Bytes.isNotEmpty()) {
-                                    // 写入管道，由解码协程处理
-                                    pipedOutputStream.write(mp3Bytes)
-                                    logDebug("Wrote ${mp3Bytes.size} bytes to decode pipe, status=$status")
-                                }
-                            }
-
-                            // status=2 表示该 chunk 合成结束
-                            if (status == 2) {
-                                logDebug("Chunk $chunkIndex finished")
-                                // 打印 extra_info（最后的汇总信息）
-                                val extraInfo = json.optJSONObject("extra_info")
-                                if (extraInfo != null) {
-                                    logDebug(
-                                        "Extra info: audio_length=${extraInfo.optInt("audio_length")}, " +
-                                                "usage_characters=${extraInfo.optInt("usage_characters")}"
-                                    )
-                                }
-                                break
-                            }
+            val dataObj = json.optJSONObject("data")
+            if (dataObj != null) {
+                val audioHex = dataObj.optString("audio", "")
+                if (audioHex.isNotBlank()) {
+                    val mp3Bytes = hexToBytes(audioHex)
+                    if (mp3Bytes.isNotEmpty() && !pipeClosed.get()) {
+                        try {
+                            pipedOutputStream.write(mp3Bytes)
+                        } catch (e: Exception) {
+                            logDebug("Pipe write error: ${e.message}")
                         }
-
-                    } catch (e: Exception) {
-                        logError("Failed to parse SSE data: $data", e)
-                        // 继续处理下一行，不中断
                     }
                 }
             }
-        } catch (e: Exception) {
-            logError("Error reading response stream", e)
-            hasError = true
-        } finally {
-            response.close()
+
+            val isFinal = json.optBoolean("is_final", false)
+            if (isFinal) {
+                val extraInfo = json.optJSONObject("extra_info")
+                if (extraInfo != null) {
+                    logDebug(
+                        "Chunk complete: audio_length=${extraInfo.optInt("audio_length")}ms, " +
+                                "usage_characters=${extraInfo.optInt("usage_characters")}"
+                    )
+                }
+            }
         }
 
-        !hasError
+        override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
+            logError("WebSocket failure", t as? Exception ?: Exception(t))
+
+            val errorMsg = when {
+                response != null -> "WebSocket连接失败: HTTP ${response.code}"
+                t.message?.contains("401", true) == true -> "鉴权失败，请检查 API Key"
+                else -> "WebSocket连接失败: ${t.message}"
+            }
+
+            if (!connectionDeferred.isCompleted) {
+                connectionDeferred.completeExceptionally(t)
+            }
+            if (!errorDeferred.isCompleted) {
+                errorDeferred.complete(errorMsg)
+            }
+            completeAllDeferred(errorMsg)
+        }
+
+        override fun onClosing(webSocket: WebSocket, code: Int, reason: String) {
+            logDebug("WebSocket closing: code=$code, reason=$reason")
+            completeAllDeferred("连接关闭: $reason")
+        }
+
+        override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
+            logDebug("WebSocket closed: code=$code, reason=$reason")
+            completeAllDeferred("连接已关闭")
+        }
+
+        private fun completeAllDeferred(errorMsg: String) {
+            pipeClosed.set(true)
+            try { pipedOutputStream.close() } catch (_: Exception) {}
+
+            if (!errorDeferred.isCompleted) {
+                errorDeferred.complete(errorMsg)
+            }
+            if (!taskStartedDeferred.isCompleted) {
+                taskStartedDeferred.completeExceptionally(Exception(errorMsg))
+            }
+            if (!taskFinishedDeferred.isCompleted) {
+                taskFinishedDeferred.completeExceptionally(Exception(errorMsg))
+            }
+        }
+
+        fun sendTaskStart(webSocket: WebSocket) {
+            val speed = convertSpeechRate(params.speechRate)
+            val vol = convertVolume(params.volume)
+            val pitch = ((params.pitch - 100f) * 12f / 100f).roundToInt().coerceIn(-12, 12)
+            val emotion = resolveEmotion(params)
+
+            val message = JSONObject().apply {
+                put("event", "task_start")
+                put("model", DEFAULT_MODEL)
+                put("continuous_sound", true)
+                put("voice_setting", JSONObject().apply {
+                    put("voice_id", voiceId)
+                    put("speed", speed)
+                    put("vol", vol)
+                    put("pitch", pitch)
+                    if (emotion.isNotBlank()) {
+                        put("emotion", emotion)
+                    }
+                })
+                put("audio_setting", JSONObject().apply {
+                    put("sample_rate", audioConfig.sampleRate)
+                    put("bitrate", 128000)
+                    put("format", "mp3")
+                    put("channel", audioConfig.channelCount)
+                })
+            }
+
+            logDebug("Sending task_start: voice=$voiceId, speed=$speed, vol=$vol, pitch=$pitch")
+            logDebug("task_start body: ${message.toString(2)}")
+            webSocket.send(message.toString())
+        }
+
+        fun sendTextChunks(webSocket: WebSocket, chunks: List<String>) {
+            for ((index, chunk) in chunks.withIndex()) {
+                if (isCancelled || pipeClosed.get()) break
+
+                val message = JSONObject().apply {
+                    put("event", "task_continue")
+                    put("text", chunk)
+                }
+
+                logDebug("Sending task_continue ${index + 1}/${chunks.size}, length=${chunk.length}")
+                webSocket.send(message.toString())
+            }
+
+            if (!isCancelled && !pipeClosed.get()) {
+                val finishMessage = JSONObject().apply {
+                    put("event", "task_finish")
+                }
+                logDebug("Sending task_finish")
+                webSocket.send(finishMessage.toString())
+            }
+        }
     }
 
-    /**
-     * 将十六进制字符串转换为字节数组
-     */
     private fun hexToBytes(hex: String): ByteArray {
         return try {
-            // MiniMax 返回的是 hex 编码的音频数据
-            // 需要转换为字节数组
             val cleanHex = hex.replace("\\s".toRegex(), "")
             if (cleanHex.length % 2 != 0) {
                 logWarning("Invalid hex string length: ${cleanHex.length}")
@@ -457,10 +491,6 @@ class MiniMaxTtsEngine : AbstractTtsEngine() {
         }
     }
 
-    /**
-     * 流式解码 MP3 数据
-     * 参考 MicrosoftTtsEngine 的实现，使用 JavaZoom 库进行流式 MP3 解码
-     */
     private fun decodeMp3Stream(inputStream: PipedInputStream, listener: TtsSynthesisListener) {
         val bitstream = Bitstream(inputStream)
         val decoder = Decoder()
@@ -484,13 +514,11 @@ class MiniMaxTtsEngine : AbstractTtsEngine() {
                         AudioConfig.DEFAULT_AUDIO_FORMAT,
                         AudioConfig.DEFAULT_CHANNEL_COUNT
                     )
-                    logDebug("Decoded ${pcmBytes.size} bytes, sampleRate=$sampleRate")
                 }
 
                 bitstream.closeFrame()
             }
         } catch (e: Exception) {
-            // 当管道关闭时，Bitstream 可能会抛出流结束异常，只需记录 Debug
             logDebug("MP3 decoding finished or interrupted: ${e.message}")
         } finally {
             try {
@@ -504,97 +532,16 @@ class MiniMaxTtsEngine : AbstractTtsEngine() {
         }
     }
 
-    /**
-     * 高性能 PCM 转换方案：利用 NIO ByteBuffer 内存块直接复制机制
-     */
     private fun shortArrayToByteArray(shortArray: ShortArray, length: Int): ByteArray {
         val buffer = ByteBuffer.allocate(length * 2).order(ByteOrder.LITTLE_ENDIAN)
         buffer.asShortBuffer().put(shortArray, 0, length)
         return buffer.array()
     }
 
-    /**
-     * 构建 HTTP 请求
-     */
-    private fun buildHttpRequest(
-        text: String,
-        config: MiniMaxTtsConfig,
-        params: SynthesisParams
-    ): Request {
-        val voiceId = if (config.voiceId.isNotEmpty()) {
-            extractRealVoiceName(config.voiceId) ?: config.voiceId
-        } else {
-            // 默认声音
-            voiceIds.firstOrNull() ?: "male-qn-qingse"
-        }
-
-        val speed = convertSpeechRate(params.speechRate)
-        val vol = convertVolume(params.volume)
-        // MiniMax pitch: [-12, 12], 0 = original pitch
-        // Android pitch: [0, 200], 100 = default (normal)
-        // Conversion: (androidPitch - 100) * 12 / 100
-        val pitch = ((params.pitch - 100f) * 12f / 100f).roundToInt().coerceIn(-12, 12)
-        val emotion = resolveEmotion(params)
-
-        logDebug("ttsSpeechRate: ${params.speechRate}, minimaxSpeed: $speed")
-        logDebug("ttsVolume: ${params.volume}, minimaxVol: $vol")
-        logDebug("ttsPitch: ${params.pitch}, minimaxPitch: $pitch")
-
-        // 构建请求体 - MiniMax T2A V2 API 格式
-        val requestBody = JSONObject().apply {
-            put("model", DEFAULT_MODEL)
-            put("text", text)
-            put("stream", true)
-            put("stream_options", JSONObject().apply {
-                put("exclude_aggregated_audio",true)
-            })
-            put("voice_setting", JSONObject().apply {
-                put("voice_id", voiceId)
-                put("speed", speed)
-                put("vol", vol)
-                put("pitch", pitch)
-                if (emotion.isNotBlank()) {
-                    put("emotion", emotion)
-                }
-            })
-            put("audio_setting", JSONObject().apply {
-                put("sample_rate", audioConfig.sampleRate)
-                put("bitrate", 128000)
-                put("format", "mp3")
-                put("channel", audioConfig.channelCount)
-            })
-        }
-
-        val mediaType = "application/json; charset=utf-8".toMediaType()
-        val body = requestBody.toString().toRequestBody(mediaType)
-
-        val request = Request.Builder()
-            .url(API_URL)
-            .post(body)
-            .header("Authorization", "Bearer ${config.apiKey}")
-            .header("Content-Type", "application/json")
-            .header("Accept", "text/event-stream")
-            .header("Connection", "keep-alive")
-            .build()
-
-        // 打印请求详情（Headers 脱敏处理仅用于日志显示，实际发送的是原始值）
-        logDebug("HTTP Request URL: ${request.url}")
-        logDebug("HTTP Request Headers (masked for log): ${request.headers.toMaskedString()}")
-        logDebug("HTTP Request Body: ${requestBody.toString(2)}")
-
-        return request
-    }
-
-    /**
-     * 根据语言解析合适的声音
-     */
     private fun resolveVoiceForLanguage(voiceId: String, language: String?): String {
-        // 如果已指定有效声音，直接返回
         if (voiceId.isNotBlank() && voiceIds.contains(voiceId)) {
             return voiceId
         }
-
-        // 根据语言返回默认声音
         return when (language?.lowercase()) {
             "zh", "zho", "chi", "cn" -> "male-qn-qingse"
             "en", "eng" -> "English_Graceful_Lady"
@@ -602,38 +549,10 @@ class MiniMaxTtsEngine : AbstractTtsEngine() {
         }
     }
 
-    /**
-     * 解析情绪参数
-     */
     private fun resolveEmotion(params: SynthesisParams): String {
-        // MiniMax 支持的情绪: happy, sad, angry, fearful, disgusted, surprised, calm, fluent, whisper
-        // Android TTS 通常没有明确的情绪映射，这里返回空字符串使用默认
-        // 未来可以通过 pitch 或其他参数推导出情绪
         return ""
     }
 
-    /**
-     * 将 Headers 转换为脱敏字符串用于日志
-     */
-    private fun okhttp3.Headers.toMaskedString(): String {
-        val sb = StringBuilder("{")
-        for (i in 0 until this.size) {
-            val name = this.name(i)
-            val value = this.value(i)
-            val maskedValue = when (name.lowercase()) {
-                "authorization" -> "Bearer ****"
-                else -> value
-            }
-            sb.append("$name=$maskedValue")
-            if (i < this.size - 1) sb.append(", ")
-        }
-        sb.append("}")
-        return sb.toString()
-    }
-
-    /**
-     * 解析错误响应
-     */
     private fun parseError(errorBody: String): String {
         return try {
             val json = JSONObject(errorBody)
@@ -654,9 +573,6 @@ class MiniMaxTtsEngine : AbstractTtsEngine() {
         }
     }
 
-    /**
-     * 解析 MiniMax 错误码
-     */
     private fun parseMiniMaxError(statusCode: Int, statusMsg: String): String {
         return when (statusCode) {
             1000 -> "未知错误: $statusMsg"
@@ -666,15 +582,15 @@ class MiniMaxTtsEngine : AbstractTtsEngine() {
             1039 -> "触发 TPM 限流，请稍后重试"
             1042 -> "非法字符超过 10%，请检查文本内容"
             2013 -> "输入参数错误: $statusMsg"
+            2201 -> "超时断开连接"
+            2202 -> "非法事件: $statusMsg"
+            2203 -> "空文本，已跳过"
+            2204 -> "超出字符限制，已跳过"
+            2205 -> "请求超限"
             else -> "语音合成失败: $statusMsg (code: $statusCode)"
         }
     }
 
-    /**
-     * 转换语速参数
-     * Android: [0, 200]，100 为默认值（表示 1.0x 倍速）
-     * MiniMax: [0.5, 2]，1 为默认值
-     */
     private fun convertSpeechRate(androidRate: Float): Float {
         return when {
             androidRate <= 50f -> 0.5f
@@ -683,25 +599,10 @@ class MiniMaxTtsEngine : AbstractTtsEngine() {
         }
     }
 
-    /**
-     * 转换音量参数
-     * Android: [0.0, 1.0]
-     * MiniMax: (0, 10]，1 为默认值
-     */
     private fun convertVolume(androidVolume: Float): Float {
-//        return when {
-//            androidVolume <= 0f -> 0.1f
-//            androidVolume >= 1.0f -> 10.0f
-//            else -> androidVolume * 10f
-//        }
-        return androidVolume;
+        return androidVolume
     }
 
-    /**
-     * 将文本分割为块
-     * MiniMax 支持最长 10000 字符，但建议超过 3000 字符使用流式
-     * 这里限制为 300 字符以保证合成质量
-     */
     private fun splitTextIntoChunks(text: String, maxLength: Int): List<String> {
         if (text.isEmpty()) return emptyList()
         if (text.length <= maxLength) return listOf(text)
@@ -718,7 +619,6 @@ class MiniMaxTtsEngine : AbstractTtsEngine() {
                 break
             }
 
-            // 在句号、逗号等标点处分割
             val isSentenceEnd = checkSentenceEnd(text, i)
             val isMidPause = checkMidPause(text, i)
 
@@ -822,7 +722,7 @@ class MiniMaxTtsEngine : AbstractTtsEngine() {
         currentVoiceId: String?
     ): String {
         val defaultVoice = voiceIds.firstOrNull() ?: "male-qn-qingse"
-        if (currentVoiceId != null && currentVoiceId.isNotBlank()) {
+        if (!currentVoiceId.isNullOrBlank()) {
             return "$currentVoiceId$VOICE_NAME_SEPARATOR$lang"
         }
         return "$defaultVoice$VOICE_NAME_SEPARATOR$lang"
@@ -848,21 +748,21 @@ class MiniMaxTtsEngine : AbstractTtsEngine() {
     override fun stop() {
         logInfo("Stopping synthesis")
         isCancelled = true
-        currentCall?.cancel()
-        currentCall = null
-        // 重置状态，允许下次合成
+        currentWebSocket?.close(1000, "User cancelled")
+        currentWebSocket = null
+        synthesisJob?.cancel()
+        synthesisJob = null
         hasCompleted = false
-        isFirstChunk = true
     }
 
     override fun release() {
         logInfo("Releasing engine")
         isCancelled = true
-        currentCall?.cancel()
-        currentCall = null
-        decodeJob?.cancel()
-        decodeJob = null
-        engineScope.cancel()
+        currentWebSocket?.close(1000, "Engine released")
+        currentWebSocket = null
+        synthesisJob?.cancel()
+        synthesisJob = null
+        engineJob.cancel()
         super.release()
     }
 
