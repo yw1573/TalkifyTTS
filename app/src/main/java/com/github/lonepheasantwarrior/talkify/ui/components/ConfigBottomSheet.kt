@@ -321,6 +321,23 @@ private fun buildConfigItems(
         )
     }
 
+    if (config is MiniMaxTtsConfig) {
+        val synthConfigLabel = getLabel("continuous_sound")
+        if (synthConfigLabel != null) {
+            items.add(
+                ConfigItem(
+                    key = "continuous_sound",
+                    label = synthConfigLabel,
+                    value = config.continuousSound.toString(),
+                    dropdownOptions = listOf(
+                        "true" to "更自然韵律",
+                        "false" to "更快速度"
+                    )
+                )
+            )
+        }
+    }
+
     return items
 }
 
@@ -370,9 +387,11 @@ private fun buildConfigFromItems(
         }
         is MiniMaxTtsConfig -> {
             val apiKey = items.find { it.key == "api_key" }?.value ?: ""
+            val continuousSound = items.find { it.key == "continuous_sound" }?.value?.toBooleanStrictOrNull() ?: true
             MiniMaxTtsConfig(
                 apiKey = apiKey,
-                voiceId = voiceId
+                voiceId = voiceId,
+                continuousSound = continuousSound
             )
         }
         else -> defaultConfig

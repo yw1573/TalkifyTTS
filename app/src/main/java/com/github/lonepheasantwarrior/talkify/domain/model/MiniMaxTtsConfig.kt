@@ -12,5 +12,6 @@ package com.github.lonepheasantwarrior.talkify.domain.model
  */
 data class MiniMaxTtsConfig(
     override val voiceId: String = "",
-    val apiKey: String = ""
+    val apiKey: String = "",
+    val continuousSound: Boolean = true
 ) : BaseEngineConfig(voiceId)

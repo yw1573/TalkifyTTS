@@ -149,7 +149,7 @@ class MiniMaxTtsEngine : AbstractTtsEngine() {
             return
         }
 
-        logInfo("Starting synthesis: textLength=${text.length}, pitch=${params.pitch}, speechRate=${params.speechRate}")
+        logInfo("Starting synthesis: textLength=${text.length}, pitch=${params.pitch}, speechRate=${params.speechRate}, continuousSound=${miniMaxConfig.continuousSound}")
 
         isCancelled = false
         hasCompleted = false
@@ -446,7 +446,7 @@ class MiniMaxTtsEngine : AbstractTtsEngine() {
             val message = JSONObject().apply {
                 put("event", "task_start")
                 put("model", DEFAULT_MODEL)
-                put("continuous_sound", true)
+                put("continuous_sound", config.continuousSound)
                 put("voice_setting", JSONObject().apply {
                     put("voice_id", voiceId)
                     put("speed", speed)
@@ -464,8 +464,8 @@ class MiniMaxTtsEngine : AbstractTtsEngine() {
                 })
             }
 
-            logDebug("Sending task_start: voice=$voiceId, speed=$speed, vol=$vol, pitch=$pitch")
-            logDebug("task_start body: ${message.toString(2)}")
+            logInfo("Sending task_start: voice=$voiceId, speed=$speed, vol=$vol, pitch=$pitch, continuousSound=${config.continuousSound}")
+            logInfo("task_start body: ${message.toString(2)}")
             webSocket.send(message.toString())
         }
 
@@ -972,6 +972,7 @@ class MiniMaxTtsEngine : AbstractTtsEngine() {
         return when (configKey) {
             "api_key" -> context.getString(R.string.api_key_label)
             "voice_id" -> context.getString(R.string.voice_select_label)
+            "continuous_sound" -> "合成配置"
             else -> null
         }
     }

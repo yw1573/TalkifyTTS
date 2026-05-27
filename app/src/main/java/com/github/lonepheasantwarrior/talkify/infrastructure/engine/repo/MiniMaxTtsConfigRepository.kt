@@ -23,7 +23,8 @@ class MiniMaxTtsConfigRepository(
         val prefsKey = getPrefsKey(engineId)
         return MiniMaxTtsConfig(
             apiKey = sharedPreferences.getString("${prefsKey}_$KEY_API_KEY", "") ?: "",
-            voiceId = sharedPreferences.getString("${prefsKey}_$KEY_VOICE_ID", "") ?: ""
+            voiceId = sharedPreferences.getString("${prefsKey}_$KEY_VOICE_ID", "") ?: "",
+            continuousSound = sharedPreferences.getBoolean("${prefsKey}_$KEY_CONTINUOUS_SOUND", true)
         )
     }
 
@@ -33,6 +34,7 @@ class MiniMaxTtsConfigRepository(
         sharedPreferences.edit()
             .putString("${prefsKey}_$KEY_API_KEY", miniMaxConfig.apiKey)
             .putString("${prefsKey}_$KEY_VOICE_ID", miniMaxConfig.voiceId)
+            .putBoolean("${prefsKey}_$KEY_CONTINUOUS_SOUND", miniMaxConfig.continuousSound)
             .apply()
     }
 
@@ -50,5 +52,6 @@ class MiniMaxTtsConfigRepository(
         private const val PREFS_NAME = "talkify_engine_configs"
         private const val KEY_API_KEY = "api_key"
         private const val KEY_VOICE_ID = "voice_id"
+        private const val KEY_CONTINUOUS_SOUND = "continuous_sound"
     }
 }
