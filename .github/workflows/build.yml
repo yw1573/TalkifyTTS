@@ -27,6 +27,11 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
+# 提前迁移到 Node.js 24 运行 JavaScript Actions
+# (Node.js 20 将于 2026-09-16 从 runner 中移除,2026-06-16 起默认强制使用 Node 24)
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
 jobs:
   build:
     name: 构建并测试
